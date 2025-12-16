@@ -1866,3 +1866,61 @@ bool MyMesh::advert() {
     return false;
   }
 }
+
+bool MyMesh::sendBellMessage() {
+  // Get the Public channel (index 0)
+  ChannelDetails channel;
+  if (!getChannel(0, channel)) {
+    return false;  // Public channel not found
+  }
+
+  // Get current timestamp from RTC
+  uint32_t timestamp = getRTCClock()->getCurrentTime();
+
+  // Bell emoji (🔔 = UTF-8: 0xF0 0x9F 0x94 0x94)
+  const char* bell_emoji = "\xF0\x9F\x94\x94";
+
+  // Compose the full message text with node name prefix (like real channel messages)
+  char full_text[64];
+  snprintf(full_text, sizeof(full_text), "%s: %s", _prefs.node_name, bell_emoji);
+
+  // Send bell emoji message to the Public channel
+  bool success = sendGroupMessage(timestamp, channel.channel, _prefs.node_name, bell_emoji, strlen(bell_emoji));
+
+  // Send formatted message to companion app (like onChannelMessageRecv does)
+  if (_serial && _serial->isConnected() && success) {
+    int i = 0;
+
+    // Format the frame like a channel message
+    if (app_target_ver >= 3) {
+      out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV_V3;
+      out_frame[i++] = 0;  // SNR (0 for self-sent)
+      out_frame[i++] = 0;  // reserved1
+      out_frame[i++] = 0;  // reserved2
+    } else {
+      out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV;
+    }
+
+    out_frame[i++] = 0;  // channel_idx (Public is index 0)
+    out_frame[i++] = 0xFF;  // path_len (0xFF = direct/self)
+    out_frame[i++] = TXT_TYPE_PLAIN;
+    memcpy(&out_frame[i], &timestamp, 4);
+    i += 4;
+
+    // Copy the full message text (with node name prefix)
+    int tlen = strlen(full_text);
+    if (i + tlen > MAX_FRAME_SIZE) {
+      tlen = MAX_FRAME_SIZE - i;
+    }
+    memcpy(&out_frame[i], full_text, tlen);
+    i += tlen;
+
+    // Add to offline queue and send notification
+    addToOfflineQueue(out_frame, i);
+    uint8_t frame[1];
+    frame[0] = PUSH_CODE_MSG_WAITING;
+    _serial->writeFrame(frame, 1);
+  }
+
+  return success;
+}

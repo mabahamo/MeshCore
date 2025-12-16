@@ -370,17 +370,29 @@ void UITask::handleButtonShortPress() {
 }
 
 void UITask::handleButtonDoublePress() {
-  MESH_DEBUG_PRINTLN("UITask: double press triggered, sending advert");
-  // ADVERT
+  MESH_DEBUG_PRINTLN("UITask: double press triggered, sending bell emoji and advert");
   #ifdef PIN_BUZZER
       notify(UIEventType::ack);
   #endif
-  if (the_mesh.advert()) {
-    MESH_DEBUG_PRINTLN("Advert sent!");
+
+  // Send bell emoji to public channel
+  bool bell_sent = the_mesh.sendBellMessage();
+
+  // Send advert
+  bool advert_sent = the_mesh.advert();
+
+  if (bell_sent && advert_sent) {
+    MESH_DEBUG_PRINTLN("Bell and advert sent!");
+    sprintf(_alert, "Bell & advert sent!");
+  } else if (bell_sent) {
+    MESH_DEBUG_PRINTLN("Bell sent, advert failed!");
+    sprintf(_alert, "Bell sent!");
+  } else if (advert_sent) {
+    MESH_DEBUG_PRINTLN("Advert sent, bell failed!");
     sprintf(_alert, "Advert sent!");
   } else {
-    MESH_DEBUG_PRINTLN("Advert failed!");
-    sprintf(_alert, "Advert failed..");
+    MESH_DEBUG_PRINTLN("Both failed!");
+    sprintf(_alert, "Send failed..");
   }
   _need_refresh = true;
 }
