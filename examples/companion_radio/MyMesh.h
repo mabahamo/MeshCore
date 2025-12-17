@@ -99,6 +99,7 @@ public:
   void handleCmdFrame(size_t len);
   bool advert();
   void enterCLIRescue();
+  bool sendBellMessage();
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
