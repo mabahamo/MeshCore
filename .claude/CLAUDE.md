@@ -1,92 +1,175 @@
-# MeshCore Project - Claude Instructions
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-MeshCore is a LoRa mesh networking firmware for embedded devices, with primary support for the T1000-E tracker hardware. The project implements encrypted peer-to-peer messaging, group channels, and mesh routing protocols.
+
+MeshCore is a lightweight, portable C++ library for multi-hop packet routing using LoRa and other packet radios. It's designed for embedded projects targeting ESP32, NRF52, RP2040, and STM32 platforms. The project is built using PlatformIO and follows embedded development best practices with no dynamic memory allocation (except during initialization).
 
 ## Build System
-- **Platform**: PlatformIO-based build system
-- **Primary build target**: `make t100e` (builds `env:t1000e_companion_radio_ble`)
-- **Firmware output**: `.pio/build/t1000e_companion_radio_ble/firmware.uf2`
-- **Flashing**: Copy UF2 file to device in bootloader mode (double-press reset button)
 
-## Architecture
+MeshCore uses **PlatformIO** as its build system. The main configuration is in `platformio.ini` with variant-specific configs in `variants/*/platformio.ini`.
+
+### Common Build Commands
+
+```bash
+# Build a specific environment/variant
+pio run -e <environment_name>
+
+# Examples:
+pio run -e RAK_4631_repeater
+pio run -e Heltec_v3_companion_radio_ble
+pio run -e t1000e_companion_radio_ble
+
+# Upload to device
+pio run -e <environment_name> -t upload
+
+# Build using the build script (creates firmwares in out/ directory)
+# Requires FIRMWARE_VERSION environment variable
+export FIRMWARE_VERSION=v1.0.0
+sh build.sh build-firmware <target>
+sh build.sh build-companion-firmwares
+sh build.sh build-repeater-firmwares
+sh build.sh build-room-server-firmwares
+
+# List all available environments
+pio project config | grep 'env:'
+
+# Makefile shortcut (example for t1000e)
+make t100e
+```
+
+### Finding Environments
+
+Environments are defined across:
+- Main `platformio.ini` (base configurations)
+- `variants/*/platformio.ini` (device-specific builds)
+
+Common patterns:
+- `*_companion_radio_ble` - BLE companion radios
+- `*_companion_radio_usb` - USB companion radios
+- `*_repeater` - Repeater firmware
+- `*_room_server` - Room server firmware
+
+## Code Architecture
+
+### Core Layer (src/)
+
+The codebase follows a layered architecture from low-level packet handling to high-level mesh operations:
+
+1. **Packet** (`Packet.h/cpp`) - Low-level packet structure and serialization
+2. **Dispatcher** (`Dispatcher.h/cpp`) - Radio abstraction, packet queuing, and transmission scheduling
+3. **Mesh** (`Mesh.h/cpp`) - Routing logic, packet forwarding, encryption handling
+4. **BaseChatMesh** (`helpers/BaseChatMesh.h/cpp`) - Chat-specific mesh features: contacts, channels, messaging
+
+Each layer extends the previous one, adding functionality while maintaining separation of concerns.
 
 ### Key Components
-1. **Mesh Core** (`src/`)
-   - `Dispatcher.cpp/h`: Radio packet handling, receive/transmit scheduling
-   - `Mesh.cpp/h`: Core mesh protocol, packet routing, encryption/decryption
-   - `Packet.h`: Packet structure definitions
-   - `Identity.cpp/h`: Cryptographic identity management (Ed25519)
 
-2. **Radio Layer** (`src/helpers/radiolib/`)
-   - Abstraction over RadioLib for LoRa radios (LR1110, SX126x, etc.)
-   - `RadioLibWrappers.cpp`: Hardware-specific radio implementations
+- **Identity** (`Identity.h/cpp`) - Node identity and cryptographic key management
+- **Utils** (`Utils.h/cpp`) - Utility functions for the mesh network
+- **MeshTables** - Abstract interface for routing tables and duplicate detection (implement in application)
+- **PacketManager** - Memory management for packet allocation (use `StaticPoolPacketManager` in helpers/)
 
-3. **Application Layer** (`examples/companion_radio/`)
-   - `MyMesh.cpp/h`: Application-level mesh features (contacts, channels, messaging)
-   - `DataStore.cpp/h`: Persistent storage for contacts, channels, settings
-   - `ui-orig/UITask.cpp/h`: User interface (display, button handling, buzzer)
+### Helper Modules (src/helpers/)
 
-### Message Flow
-- **Channel messages**: Encrypted with shared channel secret, no contact lookup required
-- **Direct messages**: Encrypted with per-contact shared secret, sender MUST be in receiver's contact list
-- Messages are queued in `offline_queue` when companion app is disconnected
-- Messages trigger notifications via buzzer (RTTTL tones)
+Platform-agnostic helper code:
+- **radiolib/** - RadioLib radio driver wrappers
+- **bridges/** - Bridge implementations for different transport types
+- **ui/** - UI components for displays
+- **esp32/**, **nrf52/**, **stm32/** - Platform-specific code
+- **sensors/** - Sensor integration code
+- **CommonCLI** - Command-line interface for repeater/room server configuration
 
-## Important Patterns
+### Example Applications (examples/)
 
-### Debugging
-- Use `MESH_DEBUG_PRINTLN()` for debug logging (requires `-D MESH_DEBUG=1` in platformio.ini)
-- For production, comment out debug flags with `;` prefix in platformio.ini
-- Serial monitoring: `screen /dev/tty.usbmodem* 115200` (or `cu`/`miniterm`)
+The examples demonstrate how to build complete applications:
+- **companion_radio/** - For connecting to apps via BLE/USB/WiFi
+- **simple_repeater/** - Network extender
+- **simple_room_server/** - BBS-style message server
+- **simple_secure_chat/** - Terminal-based secure chat
+- **simple_sensor/** - Sensor node implementation
 
-### Timing
-- Use `millis()` for Arduino timing (32-bit millisecond counter with wraparound)
-- Helper: `millisHasNowPassed(timestamp)` handles wraparound correctly
-- Helper: `futureMillis(delay_ms)` calculates future timestamp
+Each example has:
+- `main.cpp` - Application entry point
+- `MyMesh.h/cpp` - Application-specific Mesh subclass
+- Platform-specific configuration
+
+### Hardware Variants (variants/)
+
+Each hardware variant contains:
+- `platformio.ini` - Build configuration for specific board
+- Board-specific pin definitions and settings
+- LoRa radio configuration
+
+## Development Guidelines
+
+### Code Style
+
+- Use the `.clang-format` file for formatting
+- Follow existing brace and indenting style in core modules
+- **Do NOT retroactively reformat existing code** - creates unnecessary diffs
+- Think embedded: keep code concise, avoid unnecessary abstraction layers
+- Prefer simple, direct implementations over complex patterns
 
 ### Memory Management
-- Packets use static pool allocation (see `StaticPoolPacketManager`)
-- ALWAYS call `releasePacket()` or `_mgr->free()` to return packets to pool
-- Contact/channel storage uses fixed-size arrays (MAX_CONTACTS, MAX_GROUP_CHANNELS)
 
-### UI/Buzzer Integration
-- Buzzer plays RTTTL (Ring Tone Text Transfer Language) melodies non-blocking
-- Check `buzzer.isPlaying()` before starting new tone
-- Notifications: `notify(UIEventType::...)` in UITask.cpp
+- **No dynamic memory allocation** except in `setup()`/`begin()` functions
+- Use static buffers and fixed-size arrays
+- Pre-allocate all resources during initialization
 
-## Common Tasks
+### Platform Abstractions
 
-### Adding New Features
-1. State variables go in class headers (MyMesh.h, UITask.h, etc.)
-2. Initialize in constructors
-3. For persistent state, add to `NodePrefs` and call `savePrefs()`
-4. For UI features, coordinate between MyMesh and UITask via public methods
+Different platforms use different filesystems:
+- **ESP32**: SPIFFS
+- **NRF52/STM32**: InternalFS (+ optional QSPI flash or ExtraFS)
+- **RP2040**: LittleFS
 
-### Modifying Packet Handling
-- **Receive path**: `Dispatcher::checkRecv()` → `Mesh::onRecvPacket()` → `MyMesh::onMessageRecv()` / `onChannelMessageRecv()`
-- **Send path**: Create packet → `sendFlood()` / `sendDirect()` → `Dispatcher::checkSend()`
-- Always check `hasSeen()` before processing/retransmitting packets
+Platform selection is via preprocessor defines: `ESP32`, `NRF52_PLATFORM`, `RP2040_PLATFORM`, `STM32_PLATFORM`
 
-### Button Handling
-- Button events defined in `ui-orig/Button.cpp`
-- Callbacks registered in `UITask::begin()`
-- Short/double/triple/quad/long press patterns available
-- `handleButtonAnyPress()` fires first (for wake-up), then specific handler
+### Build Flags
 
-## Hardware Variants
-- **T1000-E**: Nordic nRF52840 + LR1110 radio, buzzer on pin 25, LED on pin 24
-- Config in `variants/t1000-e/platformio.ini` and `variants/t1000-e/target.cpp`
-- Board-specific code in `src/helpers/nrf52/T1000eBoard.cpp`
+Key build flags in `platformio.ini`:
+- `LORA_FREQ`, `LORA_BW`, `LORA_SF` - LoRa radio parameters
+- `ENABLE_PRIVATE_KEY_IMPORT/EXPORT` - Security features (comment out for production)
+- `RADIOLIB_EXCLUDE_*` - Exclude unused radio modules to reduce binary size
+- `DISPLAY_CLASS` - Enable display support
+- `BLE_PIN_CODE`, `WIFI_SSID` - Interface configuration
 
-## Testing
-- Physical testing requires two devices on same LoRa settings
-- Default channel is "Public" (shared across all users)
-- Direct messaging requires sender in receiver's contacts
-- Monitor with serial terminal for debug output
+## Testing and Flashing
 
-## Git Workflow
-- Never commit to main branch directly
-- Create feature branches for all changes
-- Use conventional commit messages
-- PRs should target the `main` branch
+### Web Flasher
+
+Users typically flash firmware using https://flasher.meshcore.co.uk
+
+### Manual Flashing
+
+For ESP32 devices:
+```bash
+# Non-merged binary (preserves BLE pairing)
+esptool.py -p /dev/ttyUSB0 --chip esp32-s3 write_flash 0x10000 firmware.bin
+
+# Merged binary (fresh install)
+esptool.py -p /dev/ttyUSB0 --chip esp32-s3 write_flash 0x00000 firmware-merged.bin
+```
+
+For NRF52 devices:
+```bash
+# Use adafruit-nrfutil with .zip firmware
+adafruit-nrfutil --verbose dfu serial --package firmware.zip -p /dev/ttyACM0 -b 115200 --singlebank --touch 1200
+```
+
+## Project Structure Notes
+
+- `/arch` - Platform-specific architecture code and libraries
+- `/boards` - Board definition files for PlatformIO
+- `/bin` - Build utilities (e.g., uf2conv)
+- `/lib` - External libraries bundled with the project
+- `/docs` - Documentation including FAQ
+
+## Contributing
+
+- Submit PRs using **'dev'** as the base branch (not 'main')
+- Open an issue first for impactful changes
+- Keep implementations simple and embedded-friendly
+- Respect the existing architecture and code style
