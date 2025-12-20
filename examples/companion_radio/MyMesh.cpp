@@ -222,6 +222,12 @@ int MyMesh::getFromOfflineQueue(uint8_t frame[]) {
     for (int i = 0; i < offline_queue_len; i++) { // delete top item from queue
       offline_queue[i] = offline_queue[i + 1];
     }
+
+    // If all messages have been read, deactivate the message alarm
+    if (offline_queue_len == 0 && _message_alarm_active) {
+      setMessageAlarm(false);
+    }
+
     return len;
   }
   return 0; // queue is empty
@@ -382,7 +388,8 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   if (should_display && _ui) {
     _ui->newMsg(path_len, from.name, text, offline_queue_len);
     if (!_serial->isConnected()) {
-      _ui->notify(UIEventType::contactMessage);
+      // Activate repeating alarm for new messages when companion app not connected
+      setMessageAlarm(true);
     }
   }
 #endif
@@ -472,6 +479,8 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
 #ifdef DISPLAY_CLASS
     if (_ui) _ui->notify(UIEventType::channelMessage);
 #endif
+    // Activate repeating alarm for new channel messages when companion app not connected
+    setMessageAlarm(true);
   }
 #ifdef DISPLAY_CLASS
   // Get the channel name from the channel index
@@ -729,6 +738,9 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   dirty_contacts_expiry = 0;
   memset(advert_paths, 0, sizeof(advert_paths));
   memset(send_scope.key, 0, sizeof(send_scope.key));
+  _message_alarm_active = false;
+  _message_alarm_next_time = 0;
+  _message_alarm_start_time = 0;
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));
@@ -1923,4 +1935,20 @@ bool MyMesh::sendBellMessage() {
   }
 
   return success;
+}
+
+void MyMesh::setMessageAlarm(bool active) {
+  _message_alarm_active = active;
+  if (active) {
+    _message_alarm_start_time = millis();
+    _message_alarm_next_time = _message_alarm_start_time + 10000; // First repeat in 10 seconds
+  } else {
+    _message_alarm_next_time = 0;
+    _message_alarm_start_time = 0;
+  }
+
+  // Play first beep immediately if activating
+  if (_ui && active) {
+    _ui->notify(UIEventType::contactMessage);
+  }
 }
