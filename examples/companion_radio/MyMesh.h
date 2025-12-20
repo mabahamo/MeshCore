@@ -100,6 +100,11 @@ public:
   bool advert();
   void enterCLIRescue();
   bool sendBellMessage();
+  void setMessageAlarm(bool active);
+  bool isMessageAlarmActive() const { return _message_alarm_active; }
+  uint32_t getMessageAlarmNextTime() const { return _message_alarm_next_time; }
+  void setMessageAlarmNextTime(uint32_t time) { _message_alarm_next_time = time; }
+  uint32_t getMessageAlarmStartTime() const { return _message_alarm_start_time; }
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
@@ -225,6 +230,10 @@ private:
 
   #define ADVERT_PATH_TABLE_SIZE   16
   AdvertPath advert_paths[ADVERT_PATH_TABLE_SIZE]; // circular table
+
+  bool _message_alarm_active;
+  uint32_t _message_alarm_next_time;
+  uint32_t _message_alarm_start_time;
 };
 
 extern MyMesh the_mesh;

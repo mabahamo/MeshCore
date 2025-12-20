@@ -316,6 +316,22 @@ void UITask::loop() {
 
 #ifdef PIN_BUZZER
   if (buzzer.isPlaying())  buzzer.loop();
+
+  // Check if message alarm should sound (every 10 seconds) or timeout (after 10 minutes)
+  if (the_mesh.isMessageAlarmActive() && !buzzer.isPlaying()) {
+    uint32_t current_time = millis();
+    uint32_t next_time = the_mesh.getMessageAlarmNextTime();
+    uint32_t elapsed_time = current_time - the_mesh.getMessageAlarmStartTime();
+
+    // Check for 10-minute timeout (600000 ms)
+    if (elapsed_time >= 600000) {
+      the_mesh.setMessageAlarm(false);
+    } else if (current_time >= next_time) {
+      // Play notification sound
+      notify(UIEventType::contactMessage);
+      the_mesh.setMessageAlarmNextTime(current_time + 10000); // Next alarm in 10 seconds
+    }
+  }
 #endif
 
   if (_display != NULL && _display->isOn()) {
@@ -352,6 +368,12 @@ void UITask::handleButtonAnyPress() {
 
 void UITask::handleButtonShortPress() {
   MESH_DEBUG_PRINTLN("UITask: short press triggered");
+
+  // Cancel message alarm if active
+  if (the_mesh.isMessageAlarmActive()) {
+    the_mesh.setMessageAlarm(false);
+  }
+
   if (_display != NULL) {
     // Only clear message preview if display was already on before button press
     if (_displayWasOn) {
