@@ -751,6 +751,8 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.bw = LORA_BW;
   _prefs.cr = LORA_CR;
   _prefs.tx_power_dbm = LORA_TX_POWER;
+  _prefs.advert_loc_policy = ADVERT_LOC_SHARE;
+  _prefs.telemetry_mode_base = TELEM_MODE_ALLOW_ALL;
   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
 }
 
