@@ -1233,7 +1233,7 @@ void MyMesh::loadForwardingHost() {
     strncpy(_forward_host, host.c_str(), sizeof(_forward_host) - 1);
     _forward_host[sizeof(_forward_host) - 1] = 0;
   } else {
-    strcpy(_forward_host, "example.com");  // Default
+    strcpy(_forward_host, "mesh.n1.b9.cl");  // Default
   }
 }
 
