@@ -125,7 +125,6 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   char _forward_host[128];
   bool _wifi_connected;
   unsigned long _last_wifi_check;
-  unsigned long _last_forward_attempt;
   uint32_t _packets_forwarded;
   uint32_t _forward_failures;
 

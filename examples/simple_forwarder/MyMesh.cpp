@@ -690,7 +690,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _forward_host[0] = 0;
   _wifi_connected = false;
   _last_wifi_check = 0;
-  _last_forward_attempt = 0;
   _packets_forwarded = 0;
   _forward_failures = 0;
 
@@ -1299,13 +1298,6 @@ bool MyMesh::ensureWiFiConnected() {
 }
 
 void MyMesh::forwardPacket(mesh::Packet* pkt, const uint8_t* raw_packet, int len, float snr, float rssi) {
-  // Rate limiting: don't forward more than once per second
-  unsigned long now = millis();
-  if (now - _last_forward_attempt < 1000) {
-    return;
-  }
-  _last_forward_attempt = now;
-
   if (!ensureWiFiConnected() || strlen(_forward_host) == 0) {
     _forward_failures++;
     return;
