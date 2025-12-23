@@ -136,7 +136,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint8_t _lora_cr;
   uint8_t _lora_tx_power;
 
-  void forwardPacket(const uint8_t* raw_packet, int len, float snr, float rssi);
+  void forwardPacket(mesh::Packet* pkt, const uint8_t* raw_packet, int len, float snr, float rssi);
   bool ensureWiFiConnected();
   void loadForwardingHost();
   void saveForwardingHost(const char* host);

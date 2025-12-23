@@ -350,7 +350,7 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
   uint8_t raw_packet[256];
   uint8_t raw_len = pkt->writeTo(raw_packet);
   if (raw_len > 0) {
-    forwardPacket(raw_packet, raw_len, _radio->getLastSNR(), _radio->getLastRSSI());
+    forwardPacket(pkt, raw_packet, raw_len, _radio->getLastSNR(), _radio->getLastRSSI());
   }
 #endif
 
@@ -1298,7 +1298,7 @@ bool MyMesh::ensureWiFiConnected() {
   return true;
 }
 
-void MyMesh::forwardPacket(const uint8_t* raw_packet, int len, float snr, float rssi) {
+void MyMesh::forwardPacket(mesh::Packet* pkt, const uint8_t* raw_packet, int len, float snr, float rssi) {
   // Rate limiting: don't forward more than once per second
   unsigned long now = millis();
   if (now - _last_forward_attempt < 1000) {
@@ -1311,6 +1311,10 @@ void MyMesh::forwardPacket(const uint8_t* raw_packet, int len, float snr, float 
     return;
   }
 
+  // Calculate packet hash for deduplication
+  uint8_t packet_hash[MAX_HASH_SIZE];
+  pkt->calculatePacketHash(packet_hash);
+
   HTTPClient http;
   char url[256];
 
@@ -1320,8 +1324,17 @@ void MyMesh::forwardPacket(const uint8_t* raw_packet, int len, float snr, float 
   http.begin(url);
   http.addHeader("Content-Type", "application/json");
 
-  // Build JSON payload
-  String json = "{\"packet\":\"";
+  // Build JSON payload with messageId for deduplication
+  String json = "{\"messageId\":\"";
+
+  // Convert packet hash to hex string for messageId
+  for (int i = 0; i < MAX_HASH_SIZE; i++) {
+    char hex[3];
+    sprintf(hex, "%02X", packet_hash[i]);
+    json += hex;
+  }
+
+  json += "\",\"packet\":\"";
 
   // Convert packet to hex string
   for (int i = 0; i < len; i++) {
