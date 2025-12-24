@@ -687,7 +687,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   region_load_active = false;
 
 #ifdef ESP32
-  _forward_host[0] = 0;
+  strcpy(_forward_host, "mesh.n1.b9.cl");  // Default forwarding host
   _wifi_connected = false;
   _last_wifi_check = 0;
   _packets_forwarded = 0;
