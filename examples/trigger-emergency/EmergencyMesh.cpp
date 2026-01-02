@@ -1,4 +1,5 @@
 #include "EmergencyMesh.h"
+#include "ConfigStore.h"
 #include <helpers/IdentityStore.h>
 #include <helpers/ArduinoHelpers.h>
 
@@ -74,15 +75,19 @@ bool EmergencyMesh::sendPing() {
     return false;
   }
 
+  _send_attempt = 0;  // Reset attempt counter
+  _is_alarm = false;
+  _last_message = "ping";
+
   uint32_t est_timeout;
-  int result = sendMessage(*_admin_contact, getRTCClock()->getCurrentTime(), 0, "ping", _expected_ack, est_timeout);
+  int result = sendMessage(*_admin_contact, getRTCClock()->getCurrentTime(), _send_attempt, "ping", _expected_ack, est_timeout);
 
   if (result == MSG_SEND_FAILED) {
     Serial.println("ERROR: Failed to send ping");
     return false;
   }
 
-  Serial.printf("Ping sent (%s), waiting for ACK...\n", result == MSG_SEND_SENT_FLOOD ? "FLOOD" : "DIRECT");
+  Serial.printf("Ping sent (attempt %d, %s), waiting for ACK...\n", _send_attempt, result == MSG_SEND_SENT_FLOOD ? "FLOOD" : "DIRECT");
   _ack_received = false;
   return true;
 }
@@ -93,15 +98,19 @@ bool EmergencyMesh::sendAlarm() {
     return false;
   }
 
+  _send_attempt = 0;  // Reset attempt counter
+  _is_alarm = true;
+  _last_message = "alarm";
+
   uint32_t est_timeout;
-  int result = sendMessage(*_admin_contact, getRTCClock()->getCurrentTime(), 0, "alarm", _expected_ack, est_timeout);
+  int result = sendMessage(*_admin_contact, getRTCClock()->getCurrentTime(), _send_attempt, "alarm", _expected_ack, est_timeout);
 
   if (result == MSG_SEND_FAILED) {
     Serial.println("ERROR: Failed to send alarm");
     return false;
   }
 
-  Serial.printf("ALARM sent (%s)!\n", result == MSG_SEND_SENT_FLOOD ? "FLOOD" : "DIRECT");
+  Serial.printf("ALARM sent (attempt %d, %s)!\n", _send_attempt, result == MSG_SEND_SENT_FLOOD ? "FLOOD" : "DIRECT");
   _ack_received = false;
   return true;
 }
@@ -128,11 +137,66 @@ bool EmergencyMesh::sendBatteryStatus(uint16_t millivolts) {
   return true;
 }
 
+bool EmergencyMesh::retrySend() {
+  if (!_admin_contact || !_last_message) {
+    return false;  // Can't retry
+  }
+
+  _send_attempt++;
+
+  // After 2 failed attempts with path, reset path and try FLOOD
+  if (_send_attempt == 2 && _admin_contact->out_path_len >= 0) {
+    Serial.println("Path failed after 2 attempts, resetting to FLOOD");
+    _admin_contact->out_path_len = -1;  // Reset path to force FLOOD
+  }
+
+  // Give up after 3 total attempts
+  if (_send_attempt >= 3) {
+    Serial.println("Send failed after 3 attempts");
+    return false;
+  }
+
+  uint32_t est_timeout;
+  int result = sendMessage(*_admin_contact, getRTCClock()->getCurrentTime(), _send_attempt, _last_message, _expected_ack, est_timeout);
+
+  if (result == MSG_SEND_FAILED) {
+    Serial.printf("ERROR: Retry %d failed to send\n", _send_attempt);
+    return false;
+  }
+
+  Serial.printf("Retry %d sent (%s), waiting for ACK...\n", _send_attempt, result == MSG_SEND_SENT_FLOOD ? "FLOOD" : "DIRECT");
+  _ack_received = false;
+  return true;
+}
+
+void EmergencyMesh::onContactPathUpdated(const ContactInfo& contact) {
+  // Check if this is the admin contact
+  if (_admin_contact && contact.id.matches(_admin_contact->id)) {
+    Serial.printf("Admin path updated: len=%d\n", contact.out_path_len);
+
+    // Save updated path to config
+    if (_config_store) {
+      ConfigStore* store = (ConfigStore*)_config_store;
+      EmergencyConfig config;
+      store->load(config);
+
+      // Update path info
+      config.admin_path_len = contact.out_path_len;
+      if (contact.out_path_len > 0 && contact.out_path_len <= 64) {
+        memcpy(config.admin_path, contact.out_path, contact.out_path_len);
+        Serial.println("Saving admin path to config");
+        store->save(config);
+      }
+    }
+  }
+}
+
 ContactInfo* EmergencyMesh::processAck(const uint8_t *data) {
   if (memcmp(data, &_expected_ack, 4) == 0) {
     Serial.println("ACK received!");
     _ack_received = true;
     _expected_ack = 0;
+    _send_attempt = 0;  // Reset on success
     return NULL;
   }
   return NULL;

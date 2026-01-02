@@ -19,7 +19,6 @@ enum State {
   STATE_CONFIG,
   STATE_WAIT_ADMIN,
   STATE_ARMED,
-  STATE_SEND_PING_PENDING,  // Waiting to send ping after mesh initializes
   STATE_PING_SENT,
   STATE_ALARM_SENT
 };
@@ -27,9 +26,8 @@ enum State {
 State current_state = STATE_CONFIG;
 unsigned long state_start_time = 0;
 unsigned long last_loop_time = 0;
-unsigned long ping_send_time = 0;  // When to send the pending ping
 
-#define AWAKE_TIMEOUT_MS 60000  // 60 seconds
+#define AWAKE_TIMEOUT_MS 120000  // 120 seconds (2 minutes)
 #define STATUS_REPORT_INTERVAL_SECS (24 * 60 * 60)  // 24 hours
 
 StdRNG fast_rng;
@@ -49,6 +47,7 @@ ConfigStore config_store(
 
 char command[256];
 char device_name[32];  // Generated from MAC address
+int current_battery_pct = 0;  // Current battery percentage
 
 void halt() {
   while (1) ;
@@ -73,6 +72,130 @@ int getBatteryPercentage(uint16_t millivolts) {
 
   return ((millivolts - MIN_MV) * 100) / (MAX_MV - MIN_MV);
 }
+
+#ifdef DISPLAY_CLASS
+void showStartupLogo() {
+  display.startFrame();
+  display.setTextSize(2);
+  display.setCursor(0, 20);
+  display.print("B9");
+  display.setCursor(0, 40);
+  display.print("Ingenieria");
+  display.setTextSize(1);
+  display.endFrame();
+  delay(500);  // Show logo for 0.5 seconds
+}
+
+void showAlarmInstruction(int battery_pct) {
+  display.startFrame();
+
+  // Battery percentage at top right
+  display.setCursor(96, 0);
+  char batt_str[8];
+  sprintf(batt_str, "%d%%", battery_pct);
+  display.print(batt_str);
+
+  // Instruction text
+  display.setCursor(0, 0);
+  display.print("<-- Presionar");
+  display.setCursor(0, 10);
+  display.print("dos veces para");
+  display.setCursor(0, 20);
+  display.print("activar alarma");
+
+  display.endFrame();
+}
+
+void showStatusWithBattery(int battery_pct, const char* line1, const char* line2 = NULL, bool show_instructions = false) {
+  display.startFrame();
+
+  // Battery percentage at top right
+  display.setCursor(96, 0);
+  char batt_str[8];
+  sprintf(batt_str, "%d%%", battery_pct);
+  display.print(batt_str);
+
+  // Show alarm instructions if requested
+  if (show_instructions) {
+    display.setCursor(0, 0);
+    display.print("<-- Presionar");
+    display.setCursor(0, 10);
+    display.print("dos veces para");
+    display.setCursor(0, 20);
+    display.print("activar alarma");
+  }
+
+  // Status text at bottom
+  if (line1) {
+    display.setCursor(0, 40);
+    display.print(line1);
+  }
+  if (line2) {
+    display.setCursor(0, 54);
+    display.print(line2);
+  }
+
+  display.endFrame();
+}
+
+void showPingStatus(int battery_pct, int attempt) {
+  display.startFrame();
+
+  // Battery percentage at top right
+  display.setCursor(96, 0);
+  char batt_str[8];
+  sprintf(batt_str, "%d%%", battery_pct);
+  display.print(batt_str);
+
+  // Ping status with retry counter (centered)
+  display.setCursor(0, 20);
+  display.print("Verificando");
+  display.setCursor(0, 30);
+  char msg[20];
+  sprintf(msg, "conectividad %d/5", attempt + 1);  // attempt is 0-based, display 1-based
+  display.print(msg);
+
+  display.endFrame();
+}
+
+void showAlarmSending(int battery_pct, int attempt) {
+  display.startFrame();
+
+  // Battery percentage at top right
+  display.setCursor(96, 0);
+  char batt_str[8];
+  sprintf(batt_str, "%d%%", battery_pct);
+  display.print(batt_str);
+
+  // Alarm sending message with retry counter
+  display.setCursor(0, 20);
+  display.print("Enviando");
+  display.setCursor(0, 30);
+  char msg[16];
+  sprintf(msg, "Alarma %d/5", attempt + 1);  // attempt is 0-based, display 1-based
+  display.print(msg);
+
+  display.endFrame();
+}
+
+void showAlarmActivated(int battery_pct) {
+  display.startFrame();
+
+  // Battery percentage at top right
+  display.setCursor(96, 0);
+  char batt_str[8];
+  sprintf(batt_str, "%d%%", battery_pct);
+  display.print(batt_str);
+
+  // Success message
+  display.setCursor(0, 20);
+  display.print("ALARMA");
+  display.setCursor(0, 30);
+  display.print("ACTIVADA");
+
+  display.endFrame();
+}
+#endif
 
 void showWelcome() {
   Serial.println("===================================");
@@ -235,6 +358,7 @@ void setup() {
 #ifdef DISPLAY_CLASS
   display.begin();
   user_btn.begin();
+  showStartupLogo();  // Show B9 Ingenier\u00eda logo on startup
 #endif
 
   // Initialize LED (pin 35 for Heltec V3)
@@ -278,9 +402,19 @@ void setup() {
 #endif
   );
 
+  // Pass config_store pointer to mesh for path updates
+  the_mesh.setConfigStore(&config_store);
+
 #ifdef ESP32
   // Check if we woke from deep sleep
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+
+  // Only show logo on power-up, not after deep sleep
+  if (wakeup_reason == ESP_SLEEP_WAKEUP_UNDEFINED) {
+#ifdef DISPLAY_CLASS
+    showStartupLogo();  // Show B9 Ingeniería logo only on power-up
+#endif
+  }
 
   if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
     Serial.println("Woke from button press!");
@@ -305,24 +439,26 @@ void setup() {
       // Restore the admin contact pointer in EmergencyMesh
       the_mesh.restoreAdminContact(config.admin_pub_key);
 
+      // Get battery status
+      uint16_t batt_mv = board.getBattMilliVolts();
+      current_battery_pct = getBatteryPercentage(batt_mv);
+      Serial.printf("Battery: %d%% (%dmV)\n", current_battery_pct, batt_mv);
+
       // Send advertisement so admin knows we're awake
       the_mesh.sendSelfAdvertisement(device_name);
 
-      // Schedule ping to be sent after mesh loop runs a few times
-      current_state = STATE_SEND_PING_PENDING;
-      ping_send_time = millis() + 2000;  // Send ping after 2 seconds
+      // Go directly to ARMED state - wait for button press
+      current_state = STATE_ARMED;
+
+#ifdef DISPLAY_CLASS
+      // Show alarm activation instruction
+      showAlarmInstruction(current_battery_pct);
+#endif
     } else {
       current_state = STATE_ARMED;
     }
 
     state_start_time = millis();
-
-#ifdef DISPLAY_CLASS
-    uint16_t batt_mv = board.getBattMilliVolts();
-    int batt_pct = getBatteryPercentage(batt_mv);
-
-    Serial.printf("Battery: %d%% (%dmV)\n", batt_pct, batt_mv);
-#endif
   } else if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
     Serial.println("Woke from 24-hour timer - sending battery status...");
 
@@ -384,21 +520,23 @@ void setup() {
       // Restore the admin contact pointer in EmergencyMesh
       the_mesh.restoreAdminContact(config.admin_pub_key);
 
+      // Get battery status
+      uint16_t batt_mv = board.getBattMilliVolts();
+      current_battery_pct = getBatteryPercentage(batt_mv);
+      Serial.printf("Battery: %d%% (%dmV)\n", current_battery_pct, batt_mv);
+
       // Send flood advertisement so admin knows we're online
       the_mesh.sendSelfAdvertisement(device_name);
 
-      // Schedule ping to be sent after mesh loop runs a few times
-      current_state = STATE_SEND_PING_PENDING;
-      ping_send_time = millis() + 2000;  // Send ping after 2 seconds
-
-      state_start_time = millis();
+      // Go directly to ARMED state - wait for button press
+      current_state = STATE_ARMED;
 
 #ifdef DISPLAY_CLASS
-      uint16_t batt_mv = board.getBattMilliVolts();
-      int batt_pct = getBatteryPercentage(batt_mv);
-
-      Serial.printf("Battery: %d%% (%dmV)\n", batt_pct, batt_mv);
+      // Show alarm activation instruction
+      showAlarmInstruction(current_battery_pct);
 #endif
+
+      state_start_time = millis();
     } else {
       // Not configured - automatically enter WAIT_ADMIN mode
       Serial.println("First boot - waiting for admin node advertisement...");
@@ -496,76 +634,34 @@ void loop() {
     }
   }
 
-  // Handle SEND_PING_PENDING mode - waiting to send ping after mesh initializes
-  else if (current_state == STATE_SEND_PING_PENDING) {
-    if (now >= ping_send_time) {
-      Serial.println("Auto-sending PING...");
-      if (the_mesh.sendPing()) {
-        current_state = STATE_PING_SENT;
-
-#ifdef DISPLAY_CLASS
-        display.startFrame();
-        display.print("PING SENT\nWaiting ACK...");
-        display.endFrame();
-#endif
-      } else {
-        Serial.println("Failed to send ping, entering ARMED mode");
-        current_state = STATE_ARMED;
-      }
-      state_start_time = now;
-    }
-
-    // Also allow double-click during pending state
-#ifdef DISPLAY_CLASS
-    int btn_event = user_btn.check();
-    if (btn_event == BUTTON_EVENT_DOUBLE_CLICK) {
-      Serial.println("Double press - sending ALARM!");
-      if (the_mesh.sendAlarm()) {
-        current_state = STATE_ALARM_SENT;
-        state_start_time = now;
-
-#ifdef DISPLAY_CLASS
-        display.startFrame();
-        display.print("ALARM SENT!");
-        display.endFrame();
-#endif
-      }
-    }
-#endif
-
-    // Timeout - go back to sleep
-    if (now - state_start_time > AWAKE_TIMEOUT_MS) {
-      Serial.println("Timeout - going back to sleep...");
-
-      // Turn off LED before sleeping
-      digitalWrite(P_LORA_TX_LED, LOW);
-
-      Serial.flush();
-      delay(100);
-
-#ifdef ESP32
-      esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_USER_BTN, 0);
-      esp_sleep_enable_timer_wakeup(STATUS_REPORT_INTERVAL_SECS * 1000000ULL);
-      esp_deep_sleep_start();
-#endif
-    }
-  }
-
-  // Handle ARMED mode (awake from deep sleep)
+  // Handle ARMED mode (awake from deep sleep or power on)
   else if (current_state == STATE_ARMED) {
 #ifdef DISPLAY_CLASS
     int btn_event = user_btn.check();
 
-    if (btn_event == BUTTON_EVENT_DOUBLE_CLICK) {
+    if (btn_event == BUTTON_EVENT_CLICK) {
+      Serial.println("Single press - sending PING...");
+      if (the_mesh.sendPing()) {
+        current_state = STATE_PING_SENT;
+        state_start_time = now;
+
+#ifdef DISPLAY_CLASS
+        showPingStatus(current_battery_pct, 0);  // Attempt 0 (first send)
+#endif
+      }
+    }
+    else if (btn_event == BUTTON_EVENT_DOUBLE_CLICK) {
       Serial.println("Double press - sending ALARM!");
+
+      // Turn on orange LED immediately when alarm is triggered
+      digitalWrite(P_LORA_TX_LED, HIGH);
+
       if (the_mesh.sendAlarm()) {
         current_state = STATE_ALARM_SENT;
         state_start_time = now;
 
 #ifdef DISPLAY_CLASS
-        display.startFrame();
-        display.print("ALARM SENT!");
-        display.endFrame();
+        showAlarmSending(current_battery_pct, 0);  // Attempt 0 (first send)
 #endif
       }
     }
@@ -591,6 +687,16 @@ void loop() {
 
   // Handle PING_SENT mode
   else if (current_state == STATE_PING_SENT) {
+    // Update display with current retry attempt
+    static uint8_t last_ping_attempt = 255;  // Track last displayed attempt
+    uint8_t current_attempt = the_mesh.getSendAttempt();
+    if (current_attempt != last_ping_attempt) {
+#ifdef DISPLAY_CLASS
+      showPingStatus(current_battery_pct, current_attempt);
+#endif
+      last_ping_attempt = current_attempt;
+    }
+
     if (the_mesh.isAckReceived()) {
       Serial.println("ACK received! Press button twice to send ALARM.");
 
@@ -598,36 +704,70 @@ void loop() {
       digitalWrite(P_LORA_TX_LED, HIGH);
 
 #ifdef DISPLAY_CLASS
-      display.startFrame();
-      display.print("ACK!\nDouble press\nfor ALARM");
-      display.endFrame();
+      // Show "Conectado" first
+      showStatusWithBattery(current_battery_pct, "Conectado", NULL);
+      delay(1500);  // Show for 1.5 seconds
+
+      // Then show alarm instruction
+      showAlarmInstruction(current_battery_pct);
 #endif
 
       the_mesh.resetAck();
+      the_mesh.resetSendFailed();
+      last_ping_attempt = 255;  // Reset for next time
       current_state = STATE_ARMED;
       state_start_time = now;
+    }
+
+    // Check if all retries failed
+    if (the_mesh.hasSendFailed()) {
+      Serial.println("Ping failed after all retries");
+
+#ifdef DISPLAY_CLASS
+      // Show "FUERA DE COBERTURA" message
+      showStatusWithBattery(current_battery_pct, "FUERA DE", "COBERTURA");
+      delay(2000);  // Show message for 2 seconds
+#endif
+
+      // Turn off LED before sleeping
+      digitalWrite(P_LORA_TX_LED, LOW);
+
+      the_mesh.resetSendFailed();
+      last_ping_attempt = 255;  // Reset for next time
+
+      Serial.flush();
+      delay(100);
+
+#ifdef ESP32
+      esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_USER_BTN, 0);
+      esp_sleep_enable_timer_wakeup(STATUS_REPORT_INTERVAL_SECS * 1000000ULL);
+      esp_deep_sleep_start();
+#endif
+      return;  // Exit early
     }
 
 #ifdef DISPLAY_CLASS
     int btn_event = user_btn.check();
     if (btn_event == BUTTON_EVENT_DOUBLE_CLICK) {
       Serial.println("Double press - sending ALARM!");
+
+      // Turn on orange LED immediately when alarm is triggered
+      digitalWrite(P_LORA_TX_LED, HIGH);
+
       if (the_mesh.sendAlarm()) {
         current_state = STATE_ALARM_SENT;
         state_start_time = now;
 
 #ifdef DISPLAY_CLASS
-        display.startFrame();
-        display.print("ALARM SENT!");
-        display.endFrame();
+        showAlarmSending(current_battery_pct, 0);  // Attempt 0 (first send)
 #endif
       }
     }
 #endif
 
-    // Timeout
+    // Manual timeout as fallback (should not normally reach here due to retry logic)
     if (now - state_start_time > AWAKE_TIMEOUT_MS) {
-      Serial.println("Timeout - going back to sleep...");
+      Serial.println("Manual timeout exceeded - going to sleep");
 
       // Turn off LED before sleeping
       digitalWrite(P_LORA_TX_LED, LOW);
@@ -645,9 +785,76 @@ void loop() {
 
   // Handle ALARM_SENT mode
   else if (current_state == STATE_ALARM_SENT) {
-    // Wait a bit for transmission to complete, then sleep
-    if (now - state_start_time > 5000) {
-      Serial.println("Alarm sent. Going back to sleep...");
+    // Check if ACK received (alarm successful)
+    if (the_mesh.isAckReceived()) {
+      Serial.println("Alarm ACK received! Showing confirmation for 2 minutes...");
+
+#ifdef DISPLAY_CLASS
+      showAlarmActivated(current_battery_pct);
+#endif
+
+      // Turn LED green (ON) to show success
+      digitalWrite(P_LORA_TX_LED, HIGH);
+
+      the_mesh.resetAck();
+      the_mesh.resetSendFailed();
+
+      // Wait for 2 minutes showing the success message
+      delay(120000);  // 2 minutes
+
+      // Turn off LED before sleeping
+      digitalWrite(P_LORA_TX_LED, LOW);
+
+      Serial.println("Going back to sleep...");
+      Serial.flush();
+      delay(100);
+
+#ifdef ESP32
+      esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_USER_BTN, 0);
+      esp_sleep_enable_timer_wakeup(STATUS_REPORT_INTERVAL_SECS * 1000000ULL);
+      esp_deep_sleep_start();
+#endif
+    }
+
+    // Check if all retries failed
+    if (the_mesh.hasSendFailed()) {
+      Serial.println("Alarm failed after all retries, but continuing to sleep anyway");
+
+#ifdef DISPLAY_CLASS
+      display.startFrame();
+      display.print("ALARMA\nENVIADA\n(sin conf)");
+      display.endFrame();
+      delay(2000);
+#endif
+
+      // Turn off LED before sleeping
+      digitalWrite(P_LORA_TX_LED, LOW);
+
+      the_mesh.resetSendFailed();
+
+      Serial.flush();
+      delay(100);
+
+#ifdef ESP32
+      esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_USER_BTN, 0);
+      esp_sleep_enable_timer_wakeup(STATUS_REPORT_INTERVAL_SECS * 1000000ULL);
+      esp_deep_sleep_start();
+#endif
+    }
+
+    // Update display with current retry attempt
+    static uint8_t last_displayed_attempt = 255;  // Track last displayed attempt
+    uint8_t current_attempt = the_mesh.getSendAttempt();
+    if (current_attempt != last_displayed_attempt) {
+#ifdef DISPLAY_CLASS
+      showAlarmSending(current_battery_pct, current_attempt);
+#endif
+      last_displayed_attempt = current_attempt;
+    }
+
+    // Timeout - go to sleep even if no confirmation (2 minutes)
+    if (now - state_start_time > 120000) {  // 120 seconds (2 minutes) max wait
+      Serial.println("Alarm timeout - going to sleep");
 
       // Turn off LED before sleeping
       digitalWrite(P_LORA_TX_LED, LOW);

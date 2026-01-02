@@ -14,6 +14,11 @@ class EmergencyMesh : public BaseChatMesh {
   bool _ack_received;
   bool _admin_advert_received;
   bool _waiting_for_admin;
+  uint8_t _send_attempt;
+  bool _is_alarm;  // true if current send is alarm, false if ping
+  const char* _last_message;  // "ping" or "alarm"
+  void* _config_store;  // Pointer to ConfigStore for saving path updates
+  bool _send_failed;  // true if all retries exhausted
 
 public:
   EmergencyMesh(mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng,
@@ -25,6 +30,11 @@ public:
     _ack_received = false;
     _admin_advert_received = false;
     _waiting_for_admin = false;
+    _send_attempt = 0;
+    _is_alarm = false;
+    _last_message = NULL;
+    _config_store = NULL;
+    _send_failed = false;
   }
 
   void begin(fs::FS& fs);
@@ -39,6 +49,12 @@ public:
   bool sendBatteryStatus(uint16_t millivolts);
   bool isAckReceived() const { return _ack_received; }
   void resetAck() { _ack_received = false; _expected_ack = 0; }
+  bool retrySend();  // Retry current send with fallback logic
+  void setConfigStore(void* config_store_ptr) { _config_store = config_store_ptr; }
+  bool isWaitingForAck() const { return _expected_ack != 0; }
+  uint8_t getSendAttempt() const { return _send_attempt; }
+  bool hasSendFailed() const { return _send_failed; }
+  void resetSendFailed() { _send_failed = false; }
 
 protected:
   // BaseChatMesh callbacks
@@ -54,9 +70,7 @@ protected:
 
   void onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path_len, const uint8_t* path) override;
 
-  void onContactPathUpdated(const ContactInfo& contact) override {
-    // Not used in emergency node
-  }
+  void onContactPathUpdated(const ContactInfo& contact) override;
 
   ContactInfo* processAck(const uint8_t *data) override;
 
@@ -93,6 +107,9 @@ protected:
   }
 
   void onSendTimeout() override {
-    Serial.println("ERROR: Send timeout, no ACK");
+    Serial.println("Send timeout, no ACK");
+    if (!retrySend()) {
+      _send_failed = true;  // All retries exhausted
+    }
   }
 };
