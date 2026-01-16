@@ -88,8 +88,12 @@ void showStartupLogo() {
 void showAlarmInstruction(int battery_pct) {
   display.startFrame();
 
-  // Battery percentage at top right (small font)
+  // Arrow pointing to button (small font)
   display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("<--");
+
+  // Battery percentage at top right (small font)
   display.setCursor(96, 0);
   char batt_str[8];
   sprintf(batt_str, "%d%%", battery_pct);
