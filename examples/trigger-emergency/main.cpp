@@ -19,7 +19,6 @@ enum State {
   STATE_CONFIG,
   STATE_WAIT_ADMIN,
   STATE_ARMED,
-  STATE_PING_SENT,
   STATE_ALARM_SENT
 };
 
@@ -106,58 +105,6 @@ void showAlarmInstruction(int battery_pct) {
   display.endFrame();
 }
 
-void showStatusWithBattery(int battery_pct, const char* line1, const char* line2 = NULL, bool show_instructions = false) {
-  display.startFrame();
-
-  // Battery percentage at top right
-  display.setCursor(96, 0);
-  char batt_str[8];
-  sprintf(batt_str, "%d%%", battery_pct);
-  display.print(batt_str);
-
-  // Show alarm instructions if requested
-  if (show_instructions) {
-    display.setCursor(0, 0);
-    display.print("<-- Presionar");
-    display.setCursor(0, 10);
-    display.print("dos veces para");
-    display.setCursor(0, 20);
-    display.print("activar alarma");
-  }
-
-  // Status text at bottom
-  if (line1) {
-    display.setCursor(0, 40);
-    display.print(line1);
-  }
-  if (line2) {
-    display.setCursor(0, 54);
-    display.print(line2);
-  }
-
-  display.endFrame();
-}
-
-void showPingStatus(int battery_pct, int attempt) {
-  display.startFrame();
-
-  // Battery percentage at top right
-  display.setCursor(96, 0);
-  char batt_str[8];
-  sprintf(batt_str, "%d%%", battery_pct);
-  display.print(batt_str);
-
-  // Ping status with retry counter (centered)
-  display.setCursor(0, 20);
-  display.print("Verificando");
-  display.setCursor(0, 30);
-  char msg[20];
-  sprintf(msg, "conectividad %d/5", attempt + 1);  // attempt is 0-based, display 1-based
-  display.print(msg);
-
-  display.endFrame();
-}
-
 void showAlarmSending(int battery_pct, int attempt) {
   display.startFrame();
 
@@ -172,7 +119,7 @@ void showAlarmSending(int battery_pct, int attempt) {
   display.print("Enviando");
   display.setCursor(0, 30);
   char msg[16];
-  sprintf(msg, "Alarma %d/5", attempt + 1);  // attempt is 0-based, display 1-based
+  sprintf(msg, "Alarma %d/4", attempt + 1);  // attempt is 0-based, display 1-based
   display.print(msg);
 
   display.endFrame();
@@ -181,17 +128,22 @@ void showAlarmSending(int battery_pct, int attempt) {
 void showAlarmActivated(int battery_pct) {
   display.startFrame();
 
-  // Battery percentage at top right
+  // Battery percentage at top right (small font)
+  display.setTextSize(1);
   display.setCursor(96, 0);
   char batt_str[8];
   sprintf(batt_str, "%d%%", battery_pct);
   display.print(batt_str);
 
-  // Success message
-  display.setCursor(0, 20);
+  // Success message - large font, centered
+  display.setTextSize(2);
+  display.setCursor(10, 15);
   display.print("ALARMA");
-  display.setCursor(0, 30);
+  display.setCursor(0, 40);
   display.print("ACTIVADA");
+
+  // Reset text size to default
+  display.setTextSize(1);
 
   display.endFrame();
 }
@@ -639,18 +591,7 @@ void loop() {
 #ifdef DISPLAY_CLASS
     int btn_event = user_btn.check();
 
-    if (btn_event == BUTTON_EVENT_CLICK) {
-      Serial.println("Single press - sending PING...");
-      if (the_mesh.sendPing()) {
-        current_state = STATE_PING_SENT;
-        state_start_time = now;
-
-#ifdef DISPLAY_CLASS
-        showPingStatus(current_battery_pct, 0);  // Attempt 0 (first send)
-#endif
-      }
-    }
-    else if (btn_event == BUTTON_EVENT_DOUBLE_CLICK) {
+    if (btn_event == BUTTON_EVENT_DOUBLE_CLICK) {
       Serial.println("Double press - sending ALARM!");
 
       // Turn on orange LED immediately when alarm is triggered
@@ -670,104 +611,6 @@ void loop() {
     // Timeout - go back to sleep
     if (now - state_start_time > AWAKE_TIMEOUT_MS) {
       Serial.println("Timeout - going back to sleep...");
-
-      // Turn off LED before sleeping
-      digitalWrite(P_LORA_TX_LED, LOW);
-
-      Serial.flush();
-      delay(100);
-
-#ifdef ESP32
-      esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_USER_BTN, 0);
-      esp_sleep_enable_timer_wakeup(STATUS_REPORT_INTERVAL_SECS * 1000000ULL);
-      esp_deep_sleep_start();
-#endif
-    }
-  }
-
-  // Handle PING_SENT mode
-  else if (current_state == STATE_PING_SENT) {
-    // Update display with current retry attempt
-    static uint8_t last_ping_attempt = 255;  // Track last displayed attempt
-    uint8_t current_attempt = the_mesh.getSendAttempt();
-    if (current_attempt != last_ping_attempt) {
-#ifdef DISPLAY_CLASS
-      showPingStatus(current_battery_pct, current_attempt);
-#endif
-      last_ping_attempt = current_attempt;
-    }
-
-    if (the_mesh.isAckReceived()) {
-      Serial.println("ACK received! Press button twice to send ALARM.");
-
-      // Turn LED green (ON)
-      digitalWrite(P_LORA_TX_LED, HIGH);
-
-#ifdef DISPLAY_CLASS
-      // Show "Conectado" first
-      showStatusWithBattery(current_battery_pct, "Conectado", NULL);
-      delay(1500);  // Show for 1.5 seconds
-
-      // Then show alarm instruction
-      showAlarmInstruction(current_battery_pct);
-#endif
-
-      the_mesh.resetAck();
-      the_mesh.resetSendFailed();
-      last_ping_attempt = 255;  // Reset for next time
-      current_state = STATE_ARMED;
-      state_start_time = now;
-    }
-
-    // Check if all retries failed
-    if (the_mesh.hasSendFailed()) {
-      Serial.println("Ping failed after all retries");
-
-#ifdef DISPLAY_CLASS
-      // Show "FUERA DE COBERTURA" message
-      showStatusWithBattery(current_battery_pct, "FUERA DE", "COBERTURA");
-      delay(2000);  // Show message for 2 seconds
-#endif
-
-      // Turn off LED before sleeping
-      digitalWrite(P_LORA_TX_LED, LOW);
-
-      the_mesh.resetSendFailed();
-      last_ping_attempt = 255;  // Reset for next time
-
-      Serial.flush();
-      delay(100);
-
-#ifdef ESP32
-      esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_USER_BTN, 0);
-      esp_sleep_enable_timer_wakeup(STATUS_REPORT_INTERVAL_SECS * 1000000ULL);
-      esp_deep_sleep_start();
-#endif
-      return;  // Exit early
-    }
-
-#ifdef DISPLAY_CLASS
-    int btn_event = user_btn.check();
-    if (btn_event == BUTTON_EVENT_DOUBLE_CLICK) {
-      Serial.println("Double press - sending ALARM!");
-
-      // Turn on orange LED immediately when alarm is triggered
-      digitalWrite(P_LORA_TX_LED, HIGH);
-
-      if (the_mesh.sendAlarm()) {
-        current_state = STATE_ALARM_SENT;
-        state_start_time = now;
-
-#ifdef DISPLAY_CLASS
-        showAlarmSending(current_battery_pct, 0);  // Attempt 0 (first send)
-#endif
-      }
-    }
-#endif
-
-    // Manual timeout as fallback (should not normally reach here due to retry logic)
-    if (now - state_start_time > AWAKE_TIMEOUT_MS) {
-      Serial.println("Manual timeout exceeded - going to sleep");
 
       // Turn off LED before sleeping
       digitalWrite(P_LORA_TX_LED, LOW);

@@ -150,9 +150,9 @@ bool EmergencyMesh::retrySend() {
     _admin_contact->out_path_len = -1;  // Reset path to force FLOOD
   }
 
-  // Give up after 3 total attempts
-  if (_send_attempt >= 3) {
-    Serial.println("Send failed after 3 attempts");
+  // Give up after 4 total attempts (2 DIRECT, 2 FLOOD)
+  if (_send_attempt >= 4) {
+    Serial.println("Send failed after 4 attempts");
     return false;
   }
 
