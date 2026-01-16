@@ -88,19 +88,24 @@ void showStartupLogo() {
 void showAlarmInstruction(int battery_pct) {
   display.startFrame();
 
-  // Battery percentage at top right
+  // Battery percentage at top right (small font)
+  display.setTextSize(1);
   display.setCursor(96, 0);
   char batt_str[8];
   sprintf(batt_str, "%d%%", battery_pct);
   display.print(batt_str);
 
-  // Instruction text
-  display.setCursor(0, 0);
-  display.print("<-- Presionar");
-  display.setCursor(0, 10);
-  display.print("dos veces para");
-  display.setCursor(0, 20);
-  display.print("activar alarma");
+  // Instruction text - large font for readability
+  display.setTextSize(2);
+  display.setCursor(5, 10);
+  display.print("Doble");
+  display.setCursor(5, 28);
+  display.print("click");
+  display.setCursor(5, 46);
+  display.print("ALARMA");
+
+  // Reset text size
+  display.setTextSize(1);
 
   display.endFrame();
 }
@@ -108,19 +113,26 @@ void showAlarmInstruction(int battery_pct) {
 void showAlarmSending(int battery_pct, int attempt) {
   display.startFrame();
 
-  // Battery percentage at top right
+  // Battery percentage at top right (small font)
+  display.setTextSize(1);
   display.setCursor(96, 0);
   char batt_str[8];
   sprintf(batt_str, "%d%%", battery_pct);
   display.print(batt_str);
 
-  // Alarm sending message with retry counter
-  display.setCursor(0, 20);
+  // Alarm sending message - large font for readability
+  display.setTextSize(2);
+  display.setCursor(5, 10);
   display.print("Enviando");
-  display.setCursor(0, 30);
-  char msg[16];
-  sprintf(msg, "Alarma %d/4", attempt + 1);  // attempt is 0-based, display 1-based
+  display.setCursor(5, 28);
+  display.print("Alarma");
+  display.setCursor(5, 46);
+  char msg[8];
+  sprintf(msg, "%d/4", attempt + 1);  // attempt is 0-based, display 1-based
   display.print(msg);
+
+  // Reset text size
+  display.setTextSize(1);
 
   display.endFrame();
 }
